@@ -1,4 +1,4 @@
-
+import asyncio
 import json
 
 from loguru import logger
@@ -9,8 +9,10 @@ from starknet_py.net.account.account import Account
 from starknet_py.net.gateway_client import GatewayClient
 from starknet_py.net.models import StarknetChainId
 from starknet_py.net.signer.stark_curve_signer import KeyPair
+from web3 import Web3
+from web3.eth import AsyncEth
 
-from config import min_eth_balance
+from config import min_eth_balance, gwei
 
 ARGENT_CLASS_HASH = 0x33434ad846cdd5f23eb73ff09fe6fddd568284a0fb7d1be20ee482f044dabe2
 
@@ -52,6 +54,21 @@ async def check_update(contract: Contract):
         logger.debug('Апдейт не требуется')
         return False
 
+async def check_gas():
+    while True:
+        try:
+            w3 = Web3(Web3.AsyncHTTPProvider('https://rpc.ankr.com/eth'), modules={'eth': (AsyncEth,)}, middlewares=[])
+            gas = await w3.eth.gas_price
+            gas_ = w3.from_wei(gas, 'gwei')
+            logger.success(f'gwei сейчас - {gas_}...')
+            if gwei > gas_:
+                return True
+            logger.error(f'gwei слишком большой, жду понижения...')
+            await asyncio.sleep(30)
+        except Exception as e:
+            logger.error(e)
+            await asyncio.sleep(2)
+            return await check_gas()
 
 async def update_wallet(key):
     with open('abi.json', 'r') as f:
@@ -71,6 +88,7 @@ async def update_wallet(key):
         if balance < min_eth_balance:
             logger.error(f'{address} - баланс {balance} eth недостаточен для апдейта кошелька...')
             return False
+        await check_gas()
         tx = await account.execute(calls=update_call, auto_estimate=True)
         status = await account.client.wait_for_tx(tx.transaction_hash)
         if status.status.name in ['SUCCEEDED', 'ACCEPTED_ON_L1', 'ACCEPTED_ON_L2']:
